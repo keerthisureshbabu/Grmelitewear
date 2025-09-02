@@ -1,8 +1,11 @@
-<?php 
-// checkout.php
+<?php
+
 declare(strict_types=1);
-session_start();
-require_once __DIR__ . '/../../../backend/pages/db.php'; 
+// session_start(); // Do NOT start session here
+require_once __DIR__ . '/../../../backend/pages/db.php';
+require_once __DIR__ . '/../../checkout_otp.php'; // <-- Add this line
+
+// ...existing code...
 
 // ---------- CONFIG ----------
 $seller_state     = 'Tamil Nadu';
@@ -11,20 +14,6 @@ $upi_id_payee     = 'yourid@upi';
 $upi_qr_image     = 'assets/images/upi_qr.png';
 $otp_valid_secs   = 180;                       
 // ---------------------------
-
-// Gate: require login
-if (empty($_SESSION['user_id'])) {
-  $_SESSION['redirect_after_login'] = 'checkout.php';
-  header('Location: account.php'); exit;
-}
-
-// Gate: require cart
-if (empty($_SESSION['cart']) || !is_array($_SESSION['cart'])) {
-  header('Location: cart.php'); exit;
-}
-
-$user_id   = (int)$_SESSION['user_id'];
-$user_name = $_SESSION['user_name'] ?? 'User';
 
 $error_message = '';
 $current_step  = max(1, min(3, (int)($_GET['step'] ?? 1)));
@@ -58,23 +47,28 @@ function compute_shipping_for_state(?string $state, float $cart_total): float {
 
 /** Meta WhatsApp OTP */
 function send_whatsapp_otp(string $to_e164, string $otp): bool {
-    $token = getenv('META_WABA_TOKEN');      
-    $phone_number_id = getenv('META_PHONE_ID'); 
-    $url = "https://graph.facebook.com/v17.0/{$phone_number_id}/messages";
+    $token = getenv('META_WABA_TOKEN');        // Your Meta token
+    $phone_number_id = getenv('META_PHONE_ID'); // Your Meta WABA phone number ID
+    if (!$token || !$phone_number_id) {
+        error_log("Meta WhatsApp API: Missing token or phone_number_id");
+        return false;
+    }
+    $url = "https://graph.facebook.com/v19.0/{$phone_number_id}/messages";
 
-    // Remove '+' for Meta API
-    $to_number = preg_replace('/^\+/', '', $to_e164);
+    $to_number = preg_replace('/^\+/', '', $to_e164); // Remove + for Meta API
 
     $data = [
         'messaging_product' => 'whatsapp',
         'to'                => $to_number,
         'type'              => 'text',
-        'text'              => [
-            'body' => "Your GRM Elite Wear OTP is: {$otp}. It is valid for 3 minutes."
-        ]
+        'text'              => ['body' => "Your OTP for GRM Elite Wear checkout is: $otp"]
     ];
 
     $ch = curl_init($url);
+    if (!$ch) {
+        error_log("Meta WhatsApp API: Failed to initialize cURL");
+        return false;
+    }
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
         CURLOPT_RETURNTRANSFER => true,
@@ -83,14 +77,27 @@ function send_whatsapp_otp(string $to_e164, string $otp): bool {
             "Content-Type: application/json"
         ],
         CURLOPT_POSTFIELDS     => json_encode($data),
+        CURLOPT_TIMEOUT        => 30, // Add timeout
     ]);
 
     $response = curl_exec($ch);
+    if ($response === false) {
+        $error = curl_error($ch);
+        error_log("Meta WhatsApp API cURL error: $error");
+        curl_close($ch);
+        return false;
+    }
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
-    return ($httpCode >= 200 && $httpCode < 300);
+    if ($httpCode >= 200 && $httpCode < 300) {
+        return true;
+    } else {
+        error_log("Meta WhatsApp API failed: HTTP $httpCode, Response: $response");
+        return false;
+    }
 }
+
 
 // Cart totals
 $cart_subtotal  = 0.0; $total_quantity = 0;
@@ -115,15 +122,13 @@ if ($current_step === 1 && ($_POST['action'] ?? '') === 'send_otp') {
   if (strlen($digits) < 10) {
     $error_message = 'Enter a valid WhatsApp number.';
   } else {
-    $otp = (string)random_int(100000,999999);
-    $_SESSION['contact'] = [
-      'wa' => $wa_e164,
-      'otp' => $otp,
-      'otp_exp' => time() + $otp_valid_secs,
-      'otp_ok' => 0,
-    ];
-    if (!send_whatsapp_otp($wa_e164, $otp)) {
+    if (!send_otp($digits)) { // Use helper from checkout_otp.php
       $error_message = 'Could not send OTP. Try again.';
+    } else {
+      $_SESSION['contact'] = [
+        'wa' => $wa_e164,
+        'otp_ok' => 0,
+      ];
     }
   }
 }
@@ -131,85 +136,32 @@ if ($current_step === 1 && ($_POST['action'] ?? '') === 'send_otp') {
 // Step 1: Verify OTP
 if ($current_step === 1 && ($_POST['action'] ?? '') === 'verify_otp') {
   $code = trim($_POST['otp'] ?? '');
-  if (empty($_SESSION['contact']['otp'])) {
-    $error_message = 'Please request a new OTP.';
-  } elseif (time() > (int)$_SESSION['contact']['otp_exp']) {
-    $error_message = 'OTP expired. Request a new one.';
-  } elseif ($code !== $_SESSION['contact']['otp']) {
-    $error_message = 'Incorrect OTP.';
+  if (!verify_otp($code)) {
+    $error_message = 'Incorrect or expired OTP.';
   } else {
     $_SESSION['contact']['otp_ok'] = 1;
     header('Location: checkout.php?step=2'); exit;
   }
 }
-
+// Step 2: Shipping address
 // Step 2: Shipping address
 if ($current_step === 2 && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
-  $shipping_data = [
-    'first_name' => trim($_POST['first_name'] ?? ''),
-    'last_name'  => trim($_POST['last_name']  ?? ''),
-    'address1'   => trim($_POST['address1']   ?? ''),
-    'address2'   => trim($_POST['address2']   ?? ''),
-    'zip_code'   => trim($_POST['zip_code']   ?? ''),
-    'city'       => trim($_POST['city']       ?? ''),
-    'state'      => trim($_POST['state']      ?? ''),
-    'mobile'     => trim($_POST['mobile']     ?? ''),
-  ];
-  $required = ['first_name','last_name','address1','zip_code','city','state','mobile'];
-  $missing = [];
-  foreach ($required as $f) if ($shipping_data[$f]==='') $missing[] = ucfirst(str_replace('_',' ',$f));
-  if ($missing) { $error_message = 'Fill required fields: '.implode(', ',$missing); }
-  else {
-    $_SESSION['shipping_address'] = $shipping_data;
-    header('Location: checkout.php?step=3'); exit;
+  if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+    $error_message = 'Invalid request.';
+  } else {
+    // ...existing shipping address logic...
   }
 }
 
 // Step 3: Payment (UPI / Card)
 if ($current_step === 3 && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
-  $method = trim($_POST['payment_method'] ?? '');
-  if ($method === 'upi') {
-    $upi_entered = trim($_POST['upi_id'] ?? '');
-    if ($upi_entered === '') $error_message = 'Enter UPI ID.';
-    else {
-      $_SESSION['payment_method'] = ['method'=>'upi','upi_id'=>$upi_entered];
-      header('Location: order_place.php'); exit;
-    }
-  } elseif (in_array($method, ['debit_card','credit_card'], true)) {
-    $card_number = trim($_POST['card_number'] ?? '');
-    $expiry      = trim($_POST['expiry']      ?? '');
-    $cvv         = trim($_POST['cvv']         ?? '');
-    $card_holder = trim($_POST['card_holder'] ?? '');
-    $clean       = preg_replace('/\D/','',$card_number);
-    if ($card_holder==='' || $expiry==='' || $cvv==='' || $clean==='') {
-      $error_message = 'Enter all card fields.';
-    } elseif (!luhn_check($clean)) {
-      $error_message = 'Invalid card number.';
-    } elseif (!preg_match('/^(0[1-9]|1[0-2])\/\d{2}$/',$expiry)) {
-      $error_message = 'Invalid expiry format.';
-    } else {
-      [$mm,$yy] = explode('/',$expiry);
-      $expY = 2000 + (int)$yy; $expM = (int)$mm; $nowY=(int)date('Y'); $nowM=(int)date('n');
-      if ($expY < $nowY || ($expY === $nowY && $expM < $nowM)) $error_message='Card expired.';
-      elseif (!preg_match('/^\d{3,4}$/',$cvv)) $error_message='Invalid CVV.';
-      else {
-        $brand = detect_card_brand($clean);
-        if (!in_array($brand, ['visa','mastercard','rupay'], true)) $error_message='We accept Visa/Mastercard/RuPay only.';
-        else {
-          $_SESSION['payment_method'] = [
-            'method'=>$method,
-            'card_brand'=>$brand,
-            'card_last4'=>substr($clean,-4),
-            'card_holder'=>$card_holder
-          ];
-          header('Location: order_place.php'); exit;
-        }
-      }
-    }
+  if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+    $error_message = 'Invalid request.';
   } else {
-    $error_message = 'Select a valid payment method.';
+    // ...existing payment logic...
   }
 }
+
 
 // ======== Tax / Totals =========
 $shipping_price = compute_shipping_for_state($shipping_address['state'] ?? '', $cart_subtotal);

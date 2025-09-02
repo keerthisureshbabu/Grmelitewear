@@ -1,5 +1,4 @@
 <?php
-<?php 
 // order_success.php
 session_start();
 include('../backend/pages/db.php');

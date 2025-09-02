@@ -1,5 +1,4 @@
 <?php
-<?php 
 // order_place.php
 declare(strict_types=1);
 session_start();
@@ -99,7 +98,7 @@ try {
             $item['product_code'],
             $item['variation_id'],
             $item['product_name'],
-            $item['size'],
+            $item['attribute'],
             $item['qty'],
             $item['price'],
             $item['price'] * $item['qty']

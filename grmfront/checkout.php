@@ -4,6 +4,25 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/assets/libs/check.php'; // Only include logic once
 
+// Gate: require login
+if (empty($_SESSION['user_id'])) {
+  $_SESSION['redirect_after_login'] = 'checkout.php';
+  header('Location: account.php'); exit;
+}
+
+// Gate: require cart
+if (empty($_SESSION['cart']) || !is_array($_SESSION['cart'])) {
+  header('Location: cart.php'); exit;
+}
+
+$user_id   = (int)$_SESSION['user_id'];
+$user_name = $_SESSION['user_name'] ?? 'User';
+
+// CSRF token for checkout forms
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 include __DIR__ . '/header.php';
 ?>
 <!-- ===== BREADCRUMB ===== -->
@@ -284,6 +303,6 @@ include __DIR__ . '/header.php';
 .small{font-size:.9rem}.xsmall{font-size:.78rem;color:#6c757d}
 </style>
 
-<script src="../grmfront/assets/js/checkout.js"></script>
+<script src="assets/js/checkout.js"></script>
 
 <?php include __DIR__ . '/footer.php'; ?>

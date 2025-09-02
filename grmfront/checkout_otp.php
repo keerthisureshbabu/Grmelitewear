@@ -1,7 +1,11 @@
 <?php
-session_start();
+// checkout_otp.php - OTP handling functions
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
-git filter-repo --path grmfront/checkout.php --invert-paths
+// Include the check.php for send_whatsapp_otp function
+require_once __DIR__ . '/assets/libs/check.php';
 
 // Generate and send OTP
 function send_otp(string $phone_number): bool {

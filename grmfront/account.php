@@ -2,6 +2,11 @@
 session_start();
 include('../backend/pages/db.php');
 
+// Generate CSRF token if not exists
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 $error_message = '';
 $success_message = '';
 
@@ -27,12 +32,15 @@ if (isset($_GET['redirect']) && !empty($_GET['redirect'])) {
 
 // Handle Login
 if (isset($_POST['login'])) {
-    $email = trim($_POST['email']);
-    $password = trim($_POST['password']);
-    
-    if (empty($email) || empty($password)) {
-        $error_message = "Please fill in all fields";
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $error_message = "Invalid request";
     } else {
+        $email = trim($_POST['email']);
+        $password = trim($_POST['password']);
+
+        if (empty($email) || empty($password)) {
+            $error_message = "Please fill in all fields";
+        } else {
         // Check if user exists
         $stmt = $conn->prepare("SELECT id, email, password, name, mobile_num FROM customers WHERE email = ?");
         $stmt->bind_param("s", $email);
@@ -41,7 +49,7 @@ if (isset($_POST['login'])) {
         
         if ($result->num_rows > 0) {
             $user = $result->fetch_assoc();
-            if ($password === $user['password']) {
+            if (password_verify($password, $user['password'])) {
                 // Store user data in session
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['user_name'] = $user['name'];
@@ -68,21 +76,27 @@ if (isset($_POST['login'])) {
         $stmt->close();
     }
 }
+}
 
 // Handle Registration
 if (isset($_POST['register'])) {
-    $name = trim($_POST['name']);
-    $email = trim($_POST['email']); 
-    $mob_number = trim($_POST['mob_number']);
-    $password = trim($_POST['password']);
-    $confirm_password = trim($_POST['confirm_password']);
-    $origin = trim($_POST['origin']);
-    
-    if (empty($name) || empty($email) || empty($mob_number) || empty($password) || empty($confirm_password) || empty($origin)) {
-        $error_message = "Please fill in all fields";
-    } elseif ($password !== $confirm_password) {
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $error_message = "Invalid request";
+    } else {
+        $name = trim($_POST['name']);
+        $email = trim($_POST['email']);
+        $mob_number = trim($_POST['mob_number']);
+        $password = trim($_POST['password']);
+        $confirm_password = trim($_POST['confirm_password']);
+        $origin = trim($_POST['origin']);
+
+        if (empty($name) || empty($email) || empty($mob_number) || empty($password) || empty($confirm_password) || empty($origin)) {
+            $error_message = "Please fill in all fields";
+        }
+        elseif ($password !== $confirm_password) {
         $error_message = "Passwords do not match";
-    } elseif (strlen($password) < 6) {
+        }
+        elseif (strlen($password) < 6) {
         $error_message = "Password must be at least 6 characters long";
     } elseif (!in_array($origin, ['direct', 'facebook', 'google'])) {
         $error_message = "Please select a valid origin";
@@ -96,9 +110,12 @@ if (isset($_POST['register'])) {
         if ($result->num_rows > 0) {
             $error_message = "Email already registered";
         } else {
+            // Hash the password
+            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+
             // Insert new user
             $stmt = $conn->prepare("INSERT INTO customers (name, email, mobile_num, password, origin, created_at) VALUES (?, ?, ?, ?, ?, NOW())");
-            $stmt->bind_param("sssss", $name, $email, $mob_number, $password, $origin);
+            $stmt->bind_param("sssss", $name, $email, $mob_number, $hashed_password, $origin);
             
             if ($stmt->execute()) {
                 $user_id = $conn->insert_id;
@@ -130,9 +147,10 @@ if (isset($_POST['register'])) {
         $stmt->close();
     }
 }
-
-include("header.php");
+}
 ?>
+
+<?php include("header.php"); ?>
 
 <div class="breadcrumb mb-0 py-26 bg-main-two-50">
     <div class="container container-lg">
@@ -161,6 +179,7 @@ include("header.php");
                         <div class="border border-gray-100 hover-border-main-600 transition-1 rounded-16 px-24 py-40 h-100">
                             <h6 class="text-xl mb-32">Login</h6>
                             <form method="POST" action="">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                 <div class="mb-24">
                                     <label for="email" class="text-neutral-900 text-lg mb-8 fw-medium">Email Address <span class="text-danger">*</span></label>
                                     <input type="email" class="common-input" id="email" name="email" placeholder="Enter your email address" required>
@@ -194,6 +213,7 @@ include("header.php");
                         <div class="border border-gray-100 hover-border-main-600 transition-1 rounded-16 px-24 py-40">
                             <h6 class="text-xl mb-32">Register</h6>
                             <form method="POST" action="">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
                                 <div class="mb-24">
                                     <label for="register_name" class="text-neutral-900 text-lg mb-8 fw-medium">Full Name <span class="text-danger">*</span></label>
                                     <input type="text" class="common-input" id="register_name" name="name" 
@@ -308,4 +328,4 @@ document.getElementById('toggleConfirmPassword').addEventListener('click', funct
 });
 </script>
 
-<?php include("footer.php");
+<?php include("footer.php");?>
